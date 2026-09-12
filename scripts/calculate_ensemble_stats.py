@@ -4,34 +4,28 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-INPUT_FILE = BASE_DIR / "data" / "ensemble_chennai.csv"
-OUTPUT_FILE = BASE_DIR / "data" / "ensemble_stats_chennai.csv"
+INPUT_FILE = (
+    BASE_DIR
+    / "data"
+    / "ensemble_chennai.csv"
+)
 
+OUTPUT_FILE = (
+    BASE_DIR
+    / "data"
+    / "ensemble_stats_chennai.csv"
+)
 
-# ---------------------------------------------------------
-# Load data
-# ---------------------------------------------------------
 
 df = pd.read_csv(INPUT_FILE)
 
 
 # ---------------------------------------------------------
-# Separate control and perturbed members
-# ---------------------------------------------------------
-
-control = df[df["ensemble_member"] == "c00"].copy()
-
-perturbed = df[df["ensemble_member"].isin(
-    ["p01", "p02", "p03", "p04"]
-)].copy()
-
-
-# ---------------------------------------------------------
-# Calculate ensemble statistics
+# Calculate statistics across the five ensemble members
 # ---------------------------------------------------------
 
 stats = (
-    perturbed
+    df
     .groupby(
         [
             "location",
@@ -39,20 +33,24 @@ stats = (
             "longitude",
             "forecast_issue_time",
             "target_time",
-            "lead_time_hours"
+            "forecast_time_hours",
+            "start_step_hours",
+            "end_step_hours",
         ]
     )["forecast_rainfall_mm"]
     .agg(
         ensemble_mean="mean",
         ensemble_median="median",
         ensemble_min="min",
-        ensemble_max="max"
+        ensemble_max="max",
     )
     .reset_index()
 )
 
 
-# Spread = maximum - minimum
+# ---------------------------------------------------------
+# Ensemble spread
+# ---------------------------------------------------------
 
 stats["ensemble_spread"] = (
     stats["ensemble_max"]
@@ -61,30 +59,34 @@ stats["ensemble_spread"] = (
 
 
 # ---------------------------------------------------------
-# Add control forecast
+# Control forecast
 # ---------------------------------------------------------
 
-control = control[
+control = (
+    df[df["ensemble_member"] == "c00"]
     [
-        "target_time",
-        "forecast_rainfall_mm"
+        [
+            "target_time",
+            "forecast_rainfall_mm",
+        ]
     ]
-].rename(
-    columns={
-        "forecast_rainfall_mm": "control_forecast"
-    }
+    .rename(
+        columns={
+            "forecast_rainfall_mm": "control_forecast"
+        }
+    )
 )
 
 
 stats = stats.merge(
     control,
     on="target_time",
-    how="left"
+    how="left",
 )
 
 
 # ---------------------------------------------------------
-# Arrange columns
+# Final column order
 # ---------------------------------------------------------
 
 stats = stats[
@@ -94,13 +96,15 @@ stats = stats[
         "longitude",
         "forecast_issue_time",
         "target_time",
-        "lead_time_hours",
+        "forecast_time_hours",
+        "start_step_hours",
+        "end_step_hours",
         "control_forecast",
         "ensemble_mean",
         "ensemble_median",
         "ensemble_min",
         "ensemble_max",
-        "ensemble_spread"
+        "ensemble_spread",
     ]
 ]
 
@@ -111,16 +115,37 @@ stats = stats[
 
 stats.to_csv(
     OUTPUT_FILE,
-    index=False
+    index=False,
 )
 
 
-print("=" * 60)
+print("=" * 70)
 print("ENSEMBLE STATISTICS COMPLETE")
-print("=" * 60)
+print("=" * 70)
 
-print(f"Rows: {len(stats)}")
+print(f"Rows:   {len(stats)}")
 print(f"Output: {OUTPUT_FILE}")
 
+
 print("\nFirst 10 rows:")
-print(stats.head(10).to_string(index=False))
+
+print(
+    stats
+    .head(10)
+    .to_string(index=False)
+)
+
+
+print("\nStatistics:")
+
+print(
+    stats[
+        [
+            "control_forecast",
+            "ensemble_mean",
+            "ensemble_min",
+            "ensemble_max",
+            "ensemble_spread",
+        ]
+    ].describe()
+)

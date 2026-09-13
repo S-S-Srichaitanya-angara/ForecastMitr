@@ -1,7 +1,10 @@
+import subprocess
+import sys
+from pathlib import Path
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from pathlib import Path
 
 
 # ============================================================
@@ -10,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TIMELINE_FILE = ROOT / "data" / "forecastmitr_live_timeline.csv"
+PIPELINE_SCRIPT = ROOT / "scripts" / "run_live_pipeline.py"
 
 
 # ============================================================
@@ -31,19 +35,16 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-
-    .main {
-        padding-top: 1rem;
-    }
+    .main { padding-top: 1rem; }
 
     .block-container {
         max-width: 1400px;
-        padding-top: 2rem;
+        padding-top: 1.5rem;
         padding-bottom: 3rem;
     }
 
     .hero {
-        padding: 10px 0 20px 0;
+        padding: 10px 0 15px 0;
     }
 
     .hero-title {
@@ -66,13 +67,14 @@ st.markdown(
     }
 
     .status-title {
-        font-size: 14px;
+        font-size: 13px;
         opacity: 0.65;
         margin-bottom: 6px;
+        letter-spacing: 0.4px;
     }
 
     .status-value {
-        font-size: 25px;
+        font-size: 23px;
         font-weight: 700;
     }
 
@@ -101,6 +103,7 @@ st.markdown(
         padding: 20px;
         background: rgba(128,128,128,0.05);
         margin-top: 10px;
+        min-height: 145px;
     }
 
     .section-title {
@@ -121,8 +124,17 @@ st.markdown(
     }
 
     .diagnosis {
-        font-size: 19px;
+        font-size: 18px;
         font-weight: 700;
+    }
+
+    .live-pill {
+        display: inline-block;
+        padding: 5px 10px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 700;
+        border: 1px solid rgba(128,128,128,0.25);
     }
 
     .footer {
@@ -130,7 +142,6 @@ st.markdown(
         opacity: 0.55;
         padding-top: 25px;
     }
-
     </style>
     """,
     unsafe_allow_html=True,
@@ -138,14 +149,88 @@ st.markdown(
 
 
 # ============================================================
+# LIVE UPDATE CONTROL
+# ============================================================
+
+st.markdown(
+    """
+    <div class="hero">
+        <div class="hero-title">🌦️ ForecastMitr</div>
+        <div class="hero-subtitle">
+            AI-Powered Weather Forecast Bust Detection
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+update_col, status_col = st.columns([1.0, 2.5])
+
+with update_col:
+    update_clicked = st.button(
+        "🔄 UPDATE LIVE FORECAST",
+        type="primary",
+        use_container_width=True,
+        help="Fetch the latest available GEFS cycle and regenerate the ForecastMitr timeline.",
+    )
+
+with status_col:
+    if TIMELINE_FILE.exists():
+        modified_time = pd.Timestamp(TIMELINE_FILE.stat().st_mtime, unit="s")
+        st.caption(
+            f"Last local timeline update: **{modified_time.strftime('%d %b %Y, %H:%M:%S')}**"
+        )
+    else:
+        st.caption("No live timeline has been generated yet.")
+
+
+if update_clicked:
+    if not PIPELINE_SCRIPT.exists():
+        st.error(f"Live pipeline not found: `{PIPELINE_SCRIPT}`")
+        st.stop()
+
+    with st.status("Updating ForecastMitr from live GEFS...", expanded=True) as status:
+        st.write("Searching for the latest available GEFS cycle...")
+        result = subprocess.run(
+            [sys.executable, str(PIPELINE_SCRIPT)],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        if result.stdout:
+            # Show only the most useful final part during normal operation.
+            lines = result.stdout.strip().splitlines()
+            tail = "\n".join(lines[-35:])
+            st.code(tail, language="text")
+
+        if result.returncode != 0:
+            if result.stderr:
+                st.code(result.stderr[-5000:], language="text")
+            status.update(
+                label="Live update failed",
+                state="error",
+                expanded=True,
+            )
+            st.stop()
+
+        status.update(
+            label="Live forecast updated successfully",
+            state="complete",
+            expanded=False,
+        )
+
+    st.rerun()
+
+
+# ============================================================
 # LOAD DATA
 # ============================================================
 
 if not TIMELINE_FILE.exists():
-    st.error(
-        "Live timeline data not found.\n\n"
-        "Run:\n\n"
-        "`python scripts/run_live_forecastmitr_timeline.py`"
+    st.warning(
+        "Live timeline data is not available yet. "
+        "Click **UPDATE LIVE FORECAST** to download GEFS data and generate it."
     )
     st.stop()
 
@@ -199,15 +284,13 @@ numeric_columns = [
 for col in numeric_columns:
     df[col] = pd.to_numeric(df[col], errors="coerce")
 
-
-# ForecastMitr stores probability as 0–1.
-# Dashboard displays it as 0–100%.
-
+# Engine stores the bust score as 0–1; UI displays 0–100%.
 if df["bust_probability"].max() <= 1.5:
-    df["bust_probability"] = df["bust_probability"] * 100.0
+    df["bust_probability"] *= 100.0
 
-
-df = df.sort_values("lead_hours").reset_index(drop=True)
+df = df.dropna(subset=["lead_hours", "bust_probability"]).sort_values(
+    "lead_hours"
+).reset_index(drop=True)
 
 
 # ============================================================
@@ -227,28 +310,7 @@ high_df = df[
 
 peak_row = df.loc[df["bust_probability"].idxmax()]
 
-
-if len(bust_df) > 0:
-    earliest_bust = bust_df.iloc[0]
-else:
-    earliest_bust = None
-
-
-# ============================================================
-# HEADER
-# ============================================================
-
-st.markdown(
-    """
-    <div class="hero">
-        <div class="hero-title">🌦️ ForecastMitr</div>
-        <div class="hero-subtitle">
-            AI-Powered Weather Forecast Bust Detection
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+earliest_bust = bust_df.iloc[0] if len(bust_df) else None
 
 
 # ============================================================
@@ -308,7 +370,7 @@ with c3:
             <div class="status-title">ANALYTICS ENGINE</div>
             <div class="status-value">GEFS + XGBoost</div>
             <div class="small-label">
-                Ensemble disagreement analysis
+                Ensemble disagreement + bust-risk analysis
             </div>
         </div>
         """,
@@ -328,68 +390,55 @@ st.markdown(
 m1, m2, m3, m4 = st.columns(4)
 
 with m1:
-    st.metric(
-        "Peak Bust Risk",
-        f"{peak_row['bust_probability']:.1f}%",
-    )
+    st.metric("Peak Bust Risk", f"{peak_row['bust_probability']:.1f}%")
 
 with m2:
-    st.metric(
-        "Predicted Bust Windows",
-        len(bust_df),
-    )
+    st.metric("Predicted Bust Windows", len(bust_df))
 
 with m3:
-    st.metric(
-        "High / Critical",
-        len(high_df),
-    )
+    st.metric("High / Critical", len(high_df))
 
 with m4:
-    if earliest_bust is not None:
-        st.metric(
-            "Earliest Warning",
-            f"+{int(earliest_bust['lead_hours'])} h",
-        )
-    else:
-        st.metric(
-            "Earliest Warning",
-            "None",
-        )
+    st.metric(
+        "Earliest Warning",
+        f"+{int(earliest_bust['lead_hours'])} h"
+        if earliest_bust is not None
+        else "None",
+    )
+
 
 # ============================================================
 # EARLIEST WARNING
 # ============================================================
 
 if earliest_bust is not None:
-
     lead = int(earliest_bust["lead_hours"])
     probability = float(earliest_bust["bust_probability"])
     risk = str(earliest_bust["risk_level"])
     diagnosis = str(earliest_bust["diagnosis"])
 
     warning_html = f"""
-<div class="warning-card">
-<div class="warning-title">🚨 FORECAST BUST WARNING</div>
-<div class="warning-text">
-ForecastMitr detected a potential forecast bust beginning at <b>+{lead} hours</b>.
-</div>
-<br>
-<b>Bust Risk Score:</b> {probability:.1f}%
-&nbsp;&nbsp; | &nbsp;&nbsp;
-<b>Risk:</b> {risk}
-&nbsp;&nbsp; | &nbsp;&nbsp;
-<b>Diagnosis:</b> {diagnosis}
-</div>
-"""
+    <div class="warning-card">
+        <div class="warning-title">🚨 FORECAST BUST WARNING</div>
+        <div class="warning-text">
+            ForecastMitr detected a potential forecast bust beginning at
+            <b>+{lead} hours</b>.
+        </div>
+        <br>
+        <b>Bust Risk Score:</b> {probability:.1f}%
+        &nbsp;&nbsp; | &nbsp;&nbsp;
+        <b>Risk:</b> {risk}
+        &nbsp;&nbsp; | &nbsp;&nbsp;
+        <b>Diagnosis:</b> {diagnosis}
+    </div>
+    """
 
     st.markdown(warning_html, unsafe_allow_html=True)
-
 else:
-
     st.success(
         "No forecast windows currently exceed the bust detection threshold."
     )
+
 
 # ============================================================
 # RISK TIMELINE
@@ -439,10 +488,7 @@ fig.update_layout(
     margin=dict(l=40, r=30, t=30, b=50),
 )
 
-st.plotly_chart(
-    fig,
-    use_container_width=True,
-)
+st.plotly_chart(fig, use_container_width=True)
 
 
 # ============================================================
@@ -455,8 +501,8 @@ st.markdown(
 )
 
 st.caption(
-    "Large divergence between the control forecast and ensemble "
-    "consensus is a key indicator of forecast instability."
+    "Large divergence between the control forecast and ensemble consensus "
+    "is a key indicator of forecast instability."
 )
 
 fig2 = go.Figure()
@@ -484,15 +530,12 @@ fig2.add_trace(
 fig2.update_layout(
     height=430,
     xaxis_title="Forecast Lead Time (hours)",
-    yaxis_title="Rainfall (mm)",
+    yaxis_title="Rainfall (mm / 3h)",
     hovermode="x unified",
     margin=dict(l=40, r=30, t=30, b=50),
 )
 
-st.plotly_chart(
-    fig2,
-    use_container_width=True,
-)
+st.plotly_chart(fig2, use_container_width=True)
 
 
 # ============================================================
@@ -527,14 +570,11 @@ fig3.add_trace(
 fig3.update_layout(
     height=370,
     xaxis_title="Forecast Lead Time (hours)",
-    yaxis_title="Spread (mm)",
+    yaxis_title="Spread (mm / 3h)",
     margin=dict(l=40, r=30, t=30, b=50),
 )
 
-st.plotly_chart(
-    fig3,
-    use_container_width=True,
-)
+st.plotly_chart(fig3, use_container_width=True)
 
 
 # ============================================================
@@ -553,9 +593,7 @@ with p1:
         f"""
         <div class="info-card">
             <div class="small-label">PEAK RISK WINDOW</div>
-            <div class="big-number">
-                +{int(peak_row['lead_hours'])}h
-            </div>
+            <div class="big-number">+{int(peak_row['lead_hours'])}h</div>
             <br>
             <b>Bust Risk Score</b><br>
             {peak_row['bust_probability']:.1f}%
@@ -569,9 +607,7 @@ with p2:
         f"""
         <div class="info-card">
             <div class="small-label">FORECAST DISAGREEMENT</div>
-            <div class="big-number">
-                {peak_row['control_forecast']:.2f} mm
-            </div>
+            <div class="big-number">{peak_row['control_forecast']:.2f} mm</div>
             <br>
             Control forecast
             <br><br>
@@ -587,9 +623,7 @@ with p3:
         f"""
         <div class="info-card">
             <div class="small-label">DIAGNOSIS</div>
-            <div class="diagnosis">
-                {peak_row['diagnosis']}
-            </div>
+            <div class="diagnosis">{peak_row['diagnosis']}</div>
             <br>
             Ensemble spread:
             <b>{peak_row['ensemble_spread']:.2f} mm</b>
@@ -611,30 +645,16 @@ st.markdown(
 display_df = pd.DataFrame()
 
 display_df["Lead"] = (
-    "+"
-    + df["lead_hours"].astype(int).astype(str)
-    + "h"
+    "+" + df["lead_hours"].astype(int).astype(str) + "h"
 )
-
 display_df["Control (mm)"] = df["control_forecast"].round(2)
-
-display_df["Ensemble Mean (mm)"] = (
-    df["ensemble_mean"].round(2)
-)
-
-display_df["Spread (mm)"] = (
-    df["ensemble_spread"].round(2)
-)
-
+display_df["Ensemble Mean (mm)"] = df["ensemble_mean"].round(2)
+display_df["Spread (mm)"] = df["ensemble_spread"].round(2)
 display_df["Bust Risk"] = (
-    df["bust_probability"].round(1).astype(str)
-    + "%"
+    df["bust_probability"].round(1).astype(str) + "%"
 )
-
 display_df["Risk"] = df["risk_level"]
-
 display_df["Diagnosis"] = df["diagnosis"]
-
 
 st.dataframe(
     display_df,
@@ -655,36 +675,35 @@ st.markdown(
 
 st.markdown(
     """
-    **1. GEFS Ensemble**
+    **1. Live GEFS Retrieval**
 
-    ForecastMitr retrieves multiple GEFS forecast members for the
-    selected location and future forecast windows.
+    ForecastMitr searches for the latest available GEFS cycle and retrieves
+    multiple ensemble members for Chennai and future forecast windows.
 
     **2. Ensemble Analysis**
 
-    It calculates ensemble mean, median, minimum, maximum and
-    spread to quantify forecast uncertainty.
+    It calculates ensemble mean, median, minimum, maximum and spread to
+    quantify forecast uncertainty.
 
-    **3. Forecast Comparison**
+    **3. Deterministic vs Ensemble Comparison**
 
-    The deterministic control forecast is compared against the
-    ensemble consensus.
+    The control forecast is compared against the ensemble consensus to detect
+    forecast instability.
 
     **4. AI Bust Detection**
 
-    An XGBoost model analyses the forecast characteristics and
-    estimates a **Bust Risk Score**.
+    An XGBoost model analyses the forecast characteristics and estimates a
+    **Bust Risk Score**.
 
-    **5. Diagnosis**
+    **5. Explainable Diagnosis**
 
-    ForecastMitr determines whether the dominant signal resembles
-    a possible false alarm, possible missed event, high forecast
-    intensity or ensemble uncertainty.
+    ForecastMitr identifies signals such as possible false alarms, possible
+    missed events, high forecast intensity and ensemble uncertainty.
 
     **6. Early Warning**
 
-    The system identifies the earliest future window where the
-    forecast enters the bust-risk region.
+    The system identifies the earliest future window where the forecast enters
+    the bust-risk region.
     """
 )
 
@@ -699,7 +718,7 @@ st.markdown(
     """
     <div class="footer">
         <b>ForecastMitr</b> • SIH26079 • Weather Bust Detection<br>
-        GEFS Ensemble Analysis + XGBoost + Explainable Diagnostics
+        Live GEFS Ensemble Analysis + XGBoost + Explainable Diagnostics
     </div>
     """,
     unsafe_allow_html=True,

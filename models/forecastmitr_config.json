@@ -1,0 +1,46 @@
+{
+    "model_type": "XGBoost",
+    "features": [
+        "control_forecast",
+        "ensemble_mean",
+        "ensemble_median",
+        "ensemble_min",
+        "ensemble_max",
+        "ensemble_spread",
+        "forecast_time_hours",
+        "month",
+        "control_vs_ensemble",
+        "relative_spread"
+    ],
+    "decision_threshold": 0.69,
+    "training_error_threshold_mm": 0.6298908691406273,
+    "event_rainfall_threshold_mm": 1.0,
+    "train_dates": [
+        "2000-01-01",
+        "2000-01-19",
+        "2000-01-30",
+        "2000-02-06",
+        "2000-02-24",
+        "2000-03-13",
+        "2000-03-31",
+        "2000-04-18",
+        "2000-05-06",
+        "2000-05-24",
+        "2000-06-11",
+        "2000-06-29"
+    ],
+    "validation_dates": [
+        "2000-07-17",
+        "2000-08-04",
+        "2000-08-22",
+        "2000-09-09"
+    ],
+    "test_dates": [
+        "2000-09-27",
+        "2000-10-15",
+        "2000-11-02",
+        "2000-11-20",
+        "2000-12-08"
+    ],
+    "random_state": 42
+}

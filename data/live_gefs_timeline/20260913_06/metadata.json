@@ -1,0 +1,48 @@
+{
+  "source": "NOAA/NCEP NOMADS",
+  "dataset": "GEFS 0.25 degree",
+  "date": "20260913",
+  "cycle": "06",
+  "members": [
+    "gec00",
+    "gep01",
+    "gep02",
+    "gep03",
+    "gep04"
+  ],
+  "forecast_hours": [
+    3,
+    6,
+    9,
+    12,
+    15,
+    18,
+    21,
+    24,
+    27,
+    30,
+    33,
+    36,
+    39,
+    42,
+    45,
+    48,
+    51,
+    54,
+    57,
+    60,
+    63,
+    66,
+    69,
+    72
+  ],
+  "region": {
+    "left_lon": 79.75,
+    "right_lon": 80.75,
+    "top_lat": 13.75,
+    "bottom_lat": 12.75
+  },
+  "completed_files": 120,
+  "expected_files": 120,
+  "downloaded_at_utc": "2026-09-13T10:36:41.796185"
+}

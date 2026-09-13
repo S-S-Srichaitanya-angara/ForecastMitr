@@ -1,12 +1,35 @@
 import cdsapi
+import pandas as pd
 from pathlib import Path
 
+
+# ============================================================
+# PATHS
+# ============================================================
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = BASE_DIR / "data" / "observations"
 
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+FORECAST_FILE = (
+    BASE_DIR
+    / "data"
+    / "ensemble_stats_chennai.csv"
+)
 
-client = cdsapi.Client()
+OUTPUT_DIR = (
+    BASE_DIR
+    / "data"
+    / "observations"
+)
+
+OUTPUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# ============================================================
+# CHENNAI AREA
+# ============================================================
 
 AREA = [
     13.1,   # North
@@ -15,90 +38,150 @@ AREA = [
     80.3    # East
 ]
 
-TIMES = [
-    "00:00",
-    "01:00",
-    "02:00",
-    "03:00",
-    "04:00",
-    "05:00",
-    "06:00",
-    "07:00",
-    "08:00",
-    "09:00",
-    "10:00",
-    "11:00",
-    "12:00",
-    "13:00",
-    "14:00",
-    "15:00",
-    "16:00",
-    "17:00",
-    "18:00",
-    "19:00",
-    "20:00",
-    "21:00",
-    "22:00",
-    "23:00",
-]
 
-print("Downloading January 30-31...")
+# ============================================================
+# READ FORECAST TARGET TIMES
+# ============================================================
 
-client.retrieve(
-    "reanalysis-era5-single-levels",
-    {
-        "product_type": "reanalysis",
-        "variable": [
-            "total_precipitation",
-        ],
-        "year": "2000",
-        "month": "01",
-        "day": [
-            "30",
-            "31",
-        ],
-        "time": TIMES,
-        "area": AREA,
-        "format": "netcdf",
-    },
-    str(OUTPUT_DIR / "era5_chennai_2000_01.nc"),
+forecast = pd.read_csv(
+    FORECAST_FILE,
+    parse_dates=["target_time"]
 )
 
-print("January download complete.")
+target_times = forecast["target_time"]
 
-print("\nDownloading February 1-9...")
 
-client.retrieve(
-    "reanalysis-era5-single-levels",
-    {
-        "product_type": "reanalysis",
-        "variable": [
-            "total_precipitation",
-        ],
-        "year": "2000",
-        "month": "02",
-        "day": [
-            "01",
-            "02",
-            "03",
-            "04",
-            "05",
-            "06",
-            "07",
-            "08",
-            "09",
-        ],
-        "time": TIMES,
-        "area": AREA,
-        "format": "netcdf",
-    },
-    str(OUTPUT_DIR / "era5_chennai_2000_02.nc"),
+# ============================================================
+# DETERMINE REQUIRED MONTHS
+# ============================================================
+
+required_months = sorted(
+    target_times.dt.to_period("M").unique()
 )
 
-print("February download complete.")
+print("=" * 70)
+print("ERA5 REFERENCE DATA DOWNLOAD")
+print("=" * 70)
 
-print("\n" + "=" * 60)
+print(f"Required months: {len(required_months)}")
+
+for month in required_months:
+    print(f"  {month}")
+
+
+# ============================================================
+# ERA5 CLIENT
+# ============================================================
+
+client = cdsapi.Client()
+
+
+# ============================================================
+# DOWNLOAD MONTH BY MONTH
+# ============================================================
+
+for month in required_months:
+
+    year = str(month.year)
+    month_number = f"{month.month:02d}"
+
+    output_file = (
+        OUTPUT_DIR
+        / f"era5_chennai_{year}_{month_number}.nc"
+    )
+
+    print("\n" + "-" * 70)
+    print(f"Processing {year}-{month_number}")
+    print("-" * 70)
+
+    # --------------------------------------------------------
+    # Skip existing files
+    # --------------------------------------------------------
+
+    if output_file.exists():
+
+        print(
+            f"File already exists → skipping:\n"
+            f"{output_file}"
+        )
+
+        continue
+
+    # --------------------------------------------------------
+    # All days in this month
+    # --------------------------------------------------------
+
+    start_date = pd.Timestamp(
+        year + "-" + month_number + "-01"
+    )
+
+    end_date = (
+        start_date
+        + pd.offsets.MonthEnd(1)
+    )
+
+    days = [
+        f"{day:02d}"
+        for day in range(
+            1,
+            end_date.day + 1
+        )
+    ]
+
+    # --------------------------------------------------------
+    # All hours
+    # --------------------------------------------------------
+
+    times = [
+        f"{hour:02d}:00"
+        for hour in range(24)
+    ]
+
+    print(
+        f"Downloading {year}-{month_number} "
+        f"({len(days)} days × 24 hours)"
+    )
+
+    # --------------------------------------------------------
+    # CDS request
+    # --------------------------------------------------------
+
+    client.retrieve(
+        "reanalysis-era5-single-levels",
+        {
+            "product_type": "reanalysis",
+            "variable": [
+                "total_precipitation"
+            ],
+            "year": year,
+            "month": month_number,
+            "day": days,
+            "time": times,
+            "area": AREA,
+            "format": "netcdf",
+        },
+        str(output_file),
+    )
+
+    print("Download complete.")
+    print(f"Saved to: {output_file}")
+
+
+# ============================================================
+# FINAL SUMMARY
+# ============================================================
+
+print("\n" + "=" * 70)
 print("ERA5 DOWNLOAD COMPLETE")
-print("=" * 60)
-print("January:", OUTPUT_DIR / "era5_chennai_2000_01.nc")
-print("February:", OUTPUT_DIR / "era5_chennai_2000_02.nc")
+print("=" * 70)
+
+files = sorted(
+    OUTPUT_DIR.glob(
+        "era5_chennai_2000_*.nc"
+    )
+)
+
+print(f"ERA5 files available: {len(files)}")
+
+for file in files:
+    print(f"  {file.name}")

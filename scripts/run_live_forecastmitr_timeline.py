@@ -136,115 +136,84 @@ def find_member_file(
 # ============================================================
 
 def read_grib_precipitation(filepath):
+    """Read the complete GEFS precipitation grid from a GRIB file.
+
+    Returns the grid values plus the matching latitude/longitude arrays.
+    The existing timeline only needs the nearest Chennai point, but the
+    complete grid is also retained so the dashboard can render a real
+    geographic Chennai heatmap without inventing spatial values.
+    """
 
     with open(filepath, "rb") as f:
-
         while True:
-
-            gid = (
-                eccodes.codes_grib_new_from_file(f)
-            )
-
+            gid = eccodes.codes_grib_new_from_file(f)
             if gid is None:
                 break
 
             try:
-
-                short_name = eccodes.codes_get(
-                    gid,
-                    "shortName"
-                )
+                short_name = eccodes.codes_get(gid, "shortName")
 
                 if short_name != "tp":
                     continue
 
-                lats = eccodes.codes_get_array(
-                    gid,
-                    "latitudes"
-                )
+                lats = [float(v) for v in eccodes.codes_get_array(gid, "latitudes")]
+                lons = [float(v) for v in eccodes.codes_get_array(gid, "longitudes")]
+                values = [float(v) for v in eccodes.codes_get_array(gid, "values")]
 
-                lons = eccodes.codes_get_array(
-                    gid,
-                    "longitudes"
-                )
-
-                values = eccodes.codes_get_array(
-                    gid,
-                    "values"
-                )
-
-                best_index = None
-                best_distance = float("inf")
-
-                for i, (lat, lon) in enumerate(
-                    zip(lats, lons)
-                ):
-
-                    lat = float(lat)
-                    lon = float(lon)
-
+                normalized_lons = []
+                for lon in lons:
                     if lon > 180:
                         lon -= 360
+                    normalized_lons.append(lon)
 
-                    distance = (
-                        (lat - CHENNAI_LAT) ** 2
-                        +
-                        (lon - CHENNAI_LON) ** 2
-                    )
-
-                    if distance < best_distance:
-
-                        best_distance = distance
-                        best_index = i
-
-                if best_index is None:
-
-                    raise RuntimeError(
-                        "Nearest Chennai grid "
-                        "point could not be found."
-                    )
-
-                rainfall_mm = float(
-                    values[best_index]
-                )
-
-                start_step = int(
-                    eccodes.codes_get(
-                        gid,
-                        "startStep"
-                    )
-                )
-
-                end_step = int(
-                    eccodes.codes_get(
-                        gid,
-                        "endStep"
-                    )
-                )
+                start_step = int(eccodes.codes_get(gid, "startStep"))
+                end_step = int(eccodes.codes_get(gid, "endStep"))
 
                 return {
-                    "rainfall_mm": rainfall_mm,
-                    "lat": float(
-                        lats[best_index]
-                    ),
-                    "lon": float(
-                        lons[best_index]
-                    ),
-                    "distance": math.sqrt(
-                        best_distance
-                    ),
+                    "rainfall_mm": values,
+                    "latitudes": lats,
+                    "longitudes": normalized_lons,
                     "start_step": start_step,
                     "end_step": end_step,
                 }
 
             finally:
-
                 eccodes.codes_release(gid)
 
     raise RuntimeError(
-        f"No total precipitation field found:\n"
-        f"{filepath}"
+        f"No total precipitation field found:\n{filepath}"
     )
+
+
+def extract_chennai_point(grid):
+    """Return the nearest grid point to the Chennai reference location."""
+
+    best_index = None
+    best_distance = float("inf")
+
+    for i, (lat, lon) in enumerate(
+        zip(grid["latitudes"], grid["longitudes"])
+    ):
+        distance = (
+            (lat - CHENNAI_LAT) ** 2
+            + (lon - CHENNAI_LON) ** 2
+        )
+
+        if distance < best_distance:
+            best_distance = distance
+            best_index = i
+
+    if best_index is None:
+        raise RuntimeError("Nearest Chennai grid point could not be found.")
+
+    return {
+        "rainfall_mm": grid["rainfall_mm"][best_index],
+        "lat": grid["latitudes"][best_index],
+        "lon": grid["longitudes"][best_index],
+        "distance": math.sqrt(best_distance),
+        "start_step": grid["start_step"],
+        "end_step": grid["end_step"],
+    }
 
 
 # ============================================================
@@ -367,6 +336,7 @@ def main():
     # --------------------------------------------------------
 
     rows = []
+    spatial_rows = []
 
     print()
     print("-" * 78)
@@ -403,11 +373,7 @@ def main():
                 forecast_hour
             )
 
-            extracted[member] = (
-                read_grib_precipitation(
-                    filepath
-                )
-            )
+            extracted[member] = read_grib_precipitation(filepath)
 
         # ----------------------------------------------------
         # Verify lead time
@@ -433,15 +399,23 @@ def main():
         # Statistics
         # ----------------------------------------------------
 
-        control_forecast = (
-            extracted["gec00"]
-            ["rainfall_mm"]
-        )
+        point_extracted = {
+            member: extract_chennai_point(extracted[member])
+            for member in MEMBERS
+        }
 
+        control_forecast = point_extracted["gec00"]["rainfall_mm"]
+
+        # FIX: ensemble statistics must include every member,
+        # including the control run (gec00) — this matches how
+        # calculate_ensemble_stats.py builds the TRAINING data
+        # (it groups over all 5 members, control included).
+        # Excluding the control here previously created a
+        # train/serve mismatch: the model was trained on 5-member
+        # ensemble stats but scored live on 4-member stats.
         ensemble_values = [
-            extracted[m]["rainfall_mm"]
+            point_extracted[m]["rainfall_mm"]
             for m in MEMBERS
-            if m != "gec00"
         ]
 
         ensemble_mean = (
@@ -469,6 +443,95 @@ def main():
             -
             ensemble_min
         )
+
+        # ----------------------------------------------------
+        # Save complete spatial ensemble grid for the dashboard
+        # ----------------------------------------------------
+        reference_grid = extracted[MEMBERS[0]]
+        grid_size = len(reference_grid["rainfall_mm"])
+
+        for member in MEMBERS[1:]:
+            member_grid = extracted[member]
+            if len(member_grid["rainfall_mm"]) != grid_size:
+                raise RuntimeError(
+                    f"Grid size mismatch for {member} at +{forecast_hour}h"
+                )
+            if member_grid["latitudes"] != reference_grid["latitudes"] or \
+               member_grid["longitudes"] != reference_grid["longitudes"]:
+                raise RuntimeError(
+                    f"Grid coordinates differ for {member} at +{forecast_hour}h"
+                )
+
+        for grid_index in range(grid_size):
+            grid_values = [
+                extracted[member]["rainfall_mm"][grid_index]
+                for member in MEMBERS
+            ]
+
+            grid_control = extracted["gec00"]["rainfall_mm"][grid_index]
+            grid_mean = sum(grid_values) / len(grid_values)
+            grid_median = calculate_median(grid_values)
+            grid_min = min(grid_values)
+            grid_max = max(grid_values)
+            grid_spread = grid_max - grid_min
+
+            # Spatial uncertainty is derived from the actual GEFS ensemble,
+            # not from the single Chennai XGBoost probability.  The XGBoost
+            # model has no latitude/longitude features, so its probability
+            # is kept as a Chennai point forecast only.
+            relative_spread = (
+                grid_spread / (abs(grid_mean) + 0.10)
+            )
+            control_divergence = (
+                abs(grid_control - grid_mean) /
+                (abs(grid_mean) + 0.10)
+            )
+            spatial_uncertainty_raw = (
+                0.70 * relative_spread +
+                0.30 * control_divergence
+            )
+
+            spatial_rows.append({
+                "issue_time": issue_time.isoformat(),
+                "target_time": (
+                    issue_time + timedelta(hours=lead_hours)
+                ).isoformat(),
+                "lead_hours": lead_hours,
+                "lat": reference_grid["latitudes"][grid_index],
+                "lon": reference_grid["longitudes"][grid_index],
+                "control_forecast": grid_control,
+                "ensemble_mean": grid_mean,
+                "ensemble_median": grid_median,
+                "ensemble_min": grid_min,
+                "ensemble_max": grid_max,
+                "ensemble_spread": grid_spread,
+                "relative_spread": relative_spread,
+                "control_divergence": control_divergence,
+                "spatial_uncertainty_raw": spatial_uncertainty_raw,
+            })
+
+        # Convert the raw spatial disagreement into a 0-100 percentile
+        # within this forecast lead. This is an uncertainty INDEX, not a
+        # calibrated weather-event probability. It is guaranteed to use the
+        # actual spatial distribution of the GEFS ensemble.
+        lead_spatial = [
+            row for row in spatial_rows
+            if row["lead_hours"] == lead_hours
+        ]
+        raw_values = [
+            float(row["spatial_uncertainty_raw"])
+            for row in lead_spatial
+        ]
+        ordered = sorted(raw_values)
+        rank_values = {}
+        for raw in ordered:
+            rank_values[raw] = (
+                100.0 * ordered.index(raw) / max(1, len(ordered) - 1)
+            )
+        for row in lead_spatial:
+            row["spatial_uncertainty_index"] = rank_values[
+                float(row["spatial_uncertainty_raw"])
+            ]
 
         # ----------------------------------------------------
         # ForecastMitr
@@ -613,6 +676,34 @@ def main():
         writer.writeheader()
 
         writer.writerows(rows)
+
+    # ========================================================
+    # SAVE SPATIAL CHENNAI GRID
+    # ========================================================
+
+    spatial_output = (
+        OUTPUT_FILE.parent /
+        "forecastmitr_chennai_grid.csv"
+    )
+
+    spatial_fieldnames = list(spatial_rows[0].keys())
+
+    with open(
+        spatial_output,
+        "w",
+        newline="",
+        encoding="utf-8"
+    ) as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=spatial_fieldnames
+        )
+        writer.writeheader()
+        writer.writerows(spatial_rows)
+
+    print()
+    print("Saved Chennai spatial grid:")
+    print(spatial_output)
 
     # ========================================================
     # SUMMARY

@@ -1,3 +1,4 @@
+#for training, checking data
 import xarray as xr
 from pathlib import Path
 

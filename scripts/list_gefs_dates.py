@@ -1,3 +1,4 @@
+#for training, data acquisition only year 2000
 import subprocess
 from pathlib import Path
 
